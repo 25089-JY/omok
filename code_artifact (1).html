@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>웹 오목 게임</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #f3f4f6; /* Tailwind gray-100 */
+            font-family: 'Inter', sans-serif;
+            touch-action: manipulation; /* 모바일에서 더블 탭 확대 방지 */
+        }
+        
+        #game-board {
+            background-color: #e3a953; /* 나무 느낌의 배경색 */
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* 게임 오버 모달 애니메이션 */
+        @keyframes popIn {
+            0% { transform: scale(0.9); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .modal-animate {
+            animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="max-w-2xl w-full flex flex-col items-center">
+        
+        <!-- 헤더 및 상태창 -->
+        <div class="w-full flex justify-between items-center mb-6 px-2">
+            <h1 class="text-3xl font-bold text-gray-800 tracking-tight">오목</h1>
+            <div class="flex items-center gap-4 text-lg font-semibold bg-white px-5 py-2 rounded-full shadow-sm">
+                <span class="text-gray-600">현재 차례:</span>
+                <div id="turn-indicator" class="flex items-center gap-2">
+                    <div class="w-4 h-4 rounded-full bg-black shadow-inner"></div>
+                    <span id="turn-text" class="text-black">흑돌</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 게임 캔버스 -->
+        <div class="relative w-full flex justify-center">
+            <canvas id="game-board"></canvas>
+            
+            <!-- 게임 오버 모달 (초기에는 숨김) -->
+            <div id="game-over-modal" class="absolute inset-0 z-10 flex items-center justify-center bg-black/40 rounded-lg hidden backdrop-blur-sm transition-opacity">
+                <div class="bg-white p-8 rounded-2xl shadow-2xl modal-animate text-center flex flex-col items-center max-w-sm w-[90%]">
+                    <div id="winner-icon" class="w-16 h-16 rounded-full mb-4 shadow-lg border-2 border-gray-200"></div>
+                    <h2 id="winner-text" class="text-2xl font-bold text-gray-800 mb-2">흑돌 승리!</h2>
+                    <p class="text-gray-500 mb-6">다시 한번 플레이하시겠습니까?</p>
+                    <button onclick="resetGame()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-8 rounded-xl transition-colors shadow-md hover:shadow-lg w-full">
+                        새 게임 시작
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 하단 컨트롤 -->
+        <div class="w-full flex justify-center mt-8">
+            <button onclick="resetGame()" class="text-gray-600 hover:text-gray-900 font-medium py-2 px-6 rounded-lg bg-gray-200 hover:bg-gray-300 transition-colors">
+                초기화
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game-board');
+        const ctx = canvas.getContext('2d');
+        const turnIndicatorColor = document.querySelector('#turn-indicator div');
+        const turnText = document.getElementById('turn-text');
+        const gameOverModal = document.getElementById('game-over-modal');
+        const winnerText = document.getElementById('winner-text');
+        const winnerIcon = document.getElementById('winner-icon');
+
+        const BOARD_SIZE = 15; // 15x15 오목판
+        let board = [];
+        let currentPlayer = 1; // 1: 흑, 2: 백
+        let isGameOver = false;
+        let lastMove = null; // 마지막으로 놓은 돌의 위치 {r, c}
+
+        let cellSize = 0;
+        let padding = 0;
+
+        // 보드 초기화 배열 생성
+        function initBoard() {
+            board = Array(BOARD_SIZE).fill().map(() => Array(BOARD_SIZE).fill(0));
+            currentPlayer = 1;
+            isGameOver = false;
+            lastMove = null;
+            updateTurnUI();
+            gameOverModal.classList.add('hidden');
+            resizeCanvas();
+        }
+
+        // 반응형 캔버스 리사이징 및 고해상도(Retina) 디스플레이 대응
+        function resizeCanvas() {
+            const containerWidth = Math.min(window.innerWidth - 32, 600); // 최대 너비 600px
+            const dpr = window.devicePixelRatio || 1;
+            
+            canvas.style.width = containerWidth + 'px';
+            canvas.style.height = containerWidth + 'px';
+            
+            canvas.width = containerWidth * dpr;
+            canvas.height = containerWidth * dpr;
+            
+            ctx.scale(dpr, dpr);
+            
+            // 패딩 및 셀 크기 계산 (보드 가장자리에 여백을 둠)
+            padding = containerWidth / (BOARD_SIZE + 1);
+            cellSize = containerWidth / (BOARD_SIZE + 1);
+            
+            drawBoard();
+        }
+
+        // 캔버스에 오목판 및 돌 그리기
+        function drawBoard() {
+            const width = canvas.width / (window.devicePixelRatio || 1);
+            const height = canvas.height / (window.devicePixelRatio || 1);
+            
+            ctx.clearRect(0, 0, width, height);
+
+            // 선 굵기 및 색상
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#4a3728';
+
+            // 격자 그리기
+            ctx.beginPath();
+            for (let i = 0; i < BOARD_SIZE; i++) {
+                const pos = padding + i * cellSize;
+                // 가로선
+                ctx.moveTo(padding, pos);
+                ctx.lineTo(width - padding, pos);
+                // 세로선
+                ctx.moveTo(pos, padding);
+                ctx.lineTo(pos, height - padding);
+            }
+            ctx.stroke();
+
+            // 화점(점) 그리기 (15x15에서는 주로 5곳)
+            const dots = [
+                {r: 3, c: 3}, {r: 3, c: 11}, 
+                {r: 7, c: 7}, 
+                {r: 11, c: 3}, {r: 11, c: 11}
+            ];
+            ctx.fillStyle = '#4a3728';
+            dots.forEach(dot => {
+                ctx.beginPath();
+                ctx.arc(padding + dot.c * cellSize, padding + dot.r * cellSize, 3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // 놓여진 돌 그리기
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    if (board[r][c] !== 0) {
+                        drawStone(r, c, board[r][c]);
+                    }
+                }
+            }
+        }
+
+        function drawStone(r, c, player) {
+            const x = padding + c * cellSize;
+            const y = padding + r * cellSize;
+            const radius = cellSize * 0.42;
+
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            
+            // 입체감을 위한 그라디언트 설정
+            const gradient = ctx.createRadialGradient(
+                x - radius * 0.3, y - radius * 0.3, radius * 0.1, 
+                x, y, radius
+            );
+
+            if (player === 1) { // 흑돌
+                gradient.addColorStop(0, '#555');
+                gradient.addColorStop(1, '#000');
+            } else { // 백돌
+                gradient.addColorStop(0, '#fff');
+                gradient.addColorStop(1, '#ccc');
+                // 백돌 테두리
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = '#aaa';
+                ctx.stroke();
+            }
+
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // 마지막으로 놓은 돌 표시 (빨간 작은 점)
+            if (lastMove && lastMove.r === r && lastMove.c === c) {
+                ctx.beginPath();
+                ctx.arc(x, y, radius * 0.2, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
+                ctx.fill();
+            }
+        }
+
+        // 클릭 이벤트 처리
+        canvas.addEventListener('click', (e) => {
+            if (isGameOver) return;
+
+            const rect = canvas.getBoundingClientRect();
+            // CSS 크기 대비 클릭된 실제 픽셀 위치
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            // 가장 가까운 교차점(row, col) 계산
+            const c = Math.round((x - padding) / cellSize);
+            const r = Math.round((y - padding) / cellSize);
+
+            // 유효한 범위 내이고, 빈 자리인지 확인
+            if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE && board[r][c] === 0) {
+                placeStone(r, c);
+            }
+        });
+
+        function placeStone(r, c) {
+            board[r][c] = currentPlayer;
+            lastMove = {r, c};
+            drawBoard();
+
+            if (checkWin(r, c, currentPlayer)) {
+                handleGameOver(currentPlayer);
+                return;
+            }
+
+            // 턴 넘기기
+            currentPlayer = currentPlayer === 1 ? 2 : 1;
+            updateTurnUI();
+        }
+
+        // 승리 조건 검사 로직 (8방향 탐색)
+        function checkWin(r, c, player) {
+            const directions = [
+                [0, 1],  // 가로
+                [1, 0],  // 세로
+                [1, 1],  // 우하 대각선
+                [1, -1]  // 좌하 대각선
+            ];
+
+            for (let [dr, dc] of directions) {
+                let count = 1; // 방금 놓은 돌 1개 포함
+
+                // 한쪽 방향 탐색
+                let nr = r + dr;
+                let nc = c + dc;
+                while (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && board[nr][nc] === player) {
+                    count++;
+                    nr += dr;
+                    nc += dc;
+                }
+
+                // 반대 방향 탐색
+                nr = r - dr;
+                nc = c - dc;
+                while (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && board[nr][nc] === player) {
+                    count++;
+                    nr -= dr;
+                    nc -= dc;
+                }
+
+                // 5개 이상 연속되면 승리
+                if (count >= 5) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // 턴 상태 UI 업데이트
+        function updateTurnUI() {
+            if (currentPlayer === 1) {
+                turnIndicatorColor.style.backgroundColor = 'black';
+                turnText.innerText = '흑돌';
+                turnText.style.color = 'black';
+            } else {
+                turnIndicatorColor.style.backgroundColor = 'white';
+                turnText.innerText = '백돌';
+                turnText.style.color = 'gray';
+            }
+        }
+
+        // 게임 종료 처리
+        function handleGameOver(winner) {
+            isGameOver = true;
+            
+            // 약간의 지연 후 모달 표시 (돌이 놓이는 것을 볼 수 있게)
+            setTimeout(() => {
+                if (winner === 1) {
+                    winnerText.innerText = '흑돌 승리! 🎉';
+                    winnerIcon.style.backgroundColor = 'black';
+                    winnerIcon.style.border = 'none';
+                } else {
+                    winnerText.innerText = '백돌 승리! 🎉';
+                    winnerIcon.style.backgroundColor = 'white';
+                    winnerIcon.style.borderColor = '#e5e7eb'; // gray-200
+                }
+                gameOverModal.classList.remove('hidden');
+            }, 300);
+        }
+
+        function resetGame() {
+            initBoard();
+        }
+
+        // 창 크기 변경 시 캔버스 다시 그리기 (디바운싱 생략하여 즉각 반응)
+        window.addEventListener('resize', () => {
+            if (!isGameOver) {
+                resizeCanvas();
+            }
+        });
+
+        // 초기 시작
+        window.onload = initBoard;
+
+    </script>
+</body>
+</html>
